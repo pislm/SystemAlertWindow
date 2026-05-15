@@ -1,3 +1,7 @@
+## 2.0.11
+
+* Fixed unit test — corrected channel name and codec to match the plugin's `JSONMethodCodec` registration.
+
 ## 2.0.10
 
 * Minor maintenance update.

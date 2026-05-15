@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:system_alert_window/system_alert_window.dart';
 
 void main() {
-  const MethodChannel channel = MethodChannel('system_alert_window');
+  const MethodChannel channel = MethodChannel('in.jvapps.system_alert_window', JSONMethodCodec());
 
   TestWidgetsFlutterBinding.ensureInitialized();
 
