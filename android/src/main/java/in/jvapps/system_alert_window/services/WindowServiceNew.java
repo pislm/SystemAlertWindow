@@ -91,31 +91,39 @@ public class WindowServiceNew extends Service implements View.OnTouchListener {
         }
     }
 
+    @SuppressWarnings("deprecation")
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        //Toast.makeText(this, "service starting", Toast.LENGTH_SHORT).show();
-        if (null != intent && intent.getExtras() != null) {
-            ContextHolder.setApplicationContext(this);
-            @SuppressWarnings("unchecked")
-            HashMap<String, Object> paramsMap = (HashMap<String, Object>) intent.getSerializableExtra(Constants.INTENT_EXTRA_PARAMS_MAP);
-            boolean isCloseWindow = intent.getBooleanExtra(INTENT_EXTRA_IS_CLOSE_WINDOW, false);
-            if (!isCloseWindow) {
-                assert paramsMap != null;
-                boolean isUpdateWindow = intent.getBooleanExtra(INTENT_EXTRA_IS_UPDATE_WINDOW, false);
-                if (isUpdateWindow && windowManager != null && flutterView != null) {
-                    if (flutterView.isAttachedToWindow()) {
-                        updateWindow(paramsMap);
-                    } else {
-                        createWindow(paramsMap);
-                    }
+        // A null intent means the system restarted this service after killing it (the behaviour
+        // implied by START_STICKY). We hold no saved window state, so a restart would leave the
+        // foreground notification up with no overlay behind it. Tear the service down instead of
+        // lingering as an empty foreground service, and use START_NOT_STICKY so this never happens.
+        if (intent == null || intent.getExtras() == null) {
+            LogUtils.getInstance().d(TAG, "onStartCommand received a null/empty intent, stopping the service");
+            stopForeground(true);
+            stopSelf(startId);
+            return START_NOT_STICKY;
+        }
+        ContextHolder.setApplicationContext(this);
+        @SuppressWarnings("unchecked")
+        HashMap<String, Object> paramsMap = (HashMap<String, Object>) intent.getSerializableExtra(Constants.INTENT_EXTRA_PARAMS_MAP);
+        boolean isCloseWindow = intent.getBooleanExtra(INTENT_EXTRA_IS_CLOSE_WINDOW, false);
+        if (!isCloseWindow) {
+            assert paramsMap != null;
+            boolean isUpdateWindow = intent.getBooleanExtra(INTENT_EXTRA_IS_UPDATE_WINDOW, false);
+            if (isUpdateWindow && windowManager != null && flutterView != null) {
+                if (flutterView.isAttachedToWindow()) {
+                    updateWindow(paramsMap);
                 } else {
                     createWindow(paramsMap);
                 }
             } else {
-                closeWindow(true);
+                createWindow(paramsMap);
             }
+        } else {
+            closeWindow(true, startId);
         }
-        return START_STICKY;
+        return START_NOT_STICKY;
     }
 
     private void createNotificationChannel() {
@@ -228,19 +236,41 @@ public class WindowServiceNew extends Service implements View.OnTouchListener {
     }
 
     private void closeWindow(boolean isStopService) {
+        closeWindow(isStopService, -1);
+    }
+
+    private void closeWindow(boolean isStopService, int startId) {
         LogUtils.getInstance().i(TAG, "Closing the overlay window");
-        try {
-            if (windowManager != null && flutterView != null) {
-                    windowManager.removeView(flutterView);
-                    windowManager = null;
-                    flutterView.detachFromFlutterEngine();
-                    LogUtils.getInstance().i(TAG, "Successfully closed overlay window");
+        // Detach from the cached engine before removing the view. The engine is a singleton shared
+        // across every show/close cycle; if detach is skipped (e.g. removeView throws first) the
+        // next FlutterView attaches to an engine still bound to this dead surface and renders
+        // nothing — a blank overlay behind the foreground notification. Each step runs in its own
+        // try/catch so a failure in one never skips the other or the null-out below.
+        if (flutterView != null) {
+            try {
+                flutterView.detachFromFlutterEngine();
+            } catch (Exception e) {
+                LogUtils.getInstance().e(TAG, "detachFromFlutterEngine failed: " + e.getMessage());
             }
-        } catch (IllegalArgumentException e) {
-            LogUtils.getInstance().e(TAG, "view not found");
         }
+        if (windowManager != null && flutterView != null) {
+            try {
+                windowManager.removeView(flutterView);
+                LogUtils.getInstance().i(TAG, "Successfully closed overlay window");
+            } catch (IllegalArgumentException e) {
+                LogUtils.getInstance().e(TAG, "view not found");
+            }
+        }
+        windowManager = null;
+        flutterView = null;
         if (isStopService) {
-            stopSelf();
+            // stopSelf(startId) only stops if this is the most recent start request, so a close
+            // that races ahead of a newer show no longer tears down the freshly created window.
+            if (startId >= 0) {
+                stopSelf(startId);
+            } else {
+                stopSelf();
+            }
         }
     }
 
@@ -275,16 +305,19 @@ public class WindowServiceNew extends Service implements View.OnTouchListener {
 
     @Override
     public void onDestroy() {
+        // Teardown only — never rethrow. Throwing from onDestroy crashes the process during a
+        // normal service shutdown (e.g. if the NotificationManager lookup or cancel fails),
+        // turning a harmless cleanup hiccup into an app crash.
         try {
             closeWindow(false);
             LogUtils.getInstance().d(TAG, "Destroying the overlay window service");
             NotificationManager notificationManager = (NotificationManager) getApplicationContext().getSystemService(Context.NOTIFICATION_SERVICE);
-            assert notificationManager != null;
-            notificationManager.cancel(NOTIFICATION_ID);
+            if (notificationManager != null) {
+                notificationManager.cancel(NOTIFICATION_ID);
+            }
             LogUtils.getInstance().i(TAG, "Successfully destroyed overlay window service");
         } catch (java.lang.Exception e) {
-            LogUtils.getInstance().i(TAG, "on Destroy " + e.getMessage());
-            throw new RuntimeException(e);
+            LogUtils.getInstance().e(TAG, "on Destroy " + e.getMessage());
         }
     }
 

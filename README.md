@@ -3,6 +3,8 @@
 
 A flutter plugin to show Truecaller like overlay window, over all other apps along with callback events. Android Go or Android 11 & above, this plugin shows notification bubble, in other android versions, it shows an overlay window.
 
+> **Platform support: Android only.** This plugin does **not** work on iOS — iOS has no public API for drawing windows over other apps, so there is no equivalent of the overlay/bubble functionality. The iOS files in this package are a non-functional stub kept only so apps that depend on the plugin still build for iOS; the overlay methods do nothing there. See [iOS](#ios) below.
+
 ## Android
 
 ### Demo
@@ -39,9 +41,9 @@ Edge-to-edge content and window insets are handled automatically inside the bubb
 User has to manually enable bubbles from the developer options. Uses Android Bubble APIs to show the overlay window inside a notification bubble.
 
 
-## IOS
+## iOS
 
-Displays as a notification in the notification center [Help Needed]
+**Not supported.** iOS provides no public API for displaying a window over other apps, so the overlay/bubble feature cannot be implemented. The bundled iOS plugin is a stub: `showSystemWindow` and the other overlay methods have no effect (only `getPlatformVersion` returns a real value). Do not rely on this plugin for any iOS functionality.
 
 
 ## Example
