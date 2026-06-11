@@ -25,6 +25,12 @@ public class BubbleActivity extends AppCompatActivity {
 
     private Context mContext;
 
+    // Held as a field so onDestroy can detach it from the shared cached engine. Without the detach,
+    // every bubble relaunch (dismiss/reopen, rotation, Android 11+ extras-less relaunch) attached a
+    // new FlutterView while the previous one was still bound, leaving the engine rendering into a
+    // dead surface — a blank bubble.
+    private FlutterView flutterView;
+
     // Distinct from SystemAlertWindowPlugin's "SAW:Plugin" tag so logcat filtering is unambiguous.
     private final String TAG = "SAW:BubbleActivity";
 
@@ -87,6 +93,16 @@ public class BubbleActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        // Detach our view from the shared engine first (mirrors WindowServiceNew.closeWindow), then
+        // signal detached. Each step has its own catch so one failure never skips the other.
+        if (flutterView != null) {
+            try {
+                flutterView.detachFromFlutterEngine();
+            } catch (Exception e) {
+                LogUtils.getInstance().e(TAG, "detachFromFlutterEngine failed: " + e.getMessage());
+            }
+            flutterView = null;
+        }
         try{
             FlutterEngine engine = FlutterEngineCache.getInstance().get(Constants.FLUTTER_CACHE_ENGINE);
             if (engine == null) {
@@ -121,7 +137,7 @@ public class BubbleActivity extends AppCompatActivity {
             }
             // appIsResumed() is intentionally omitted here; onResume() fires immediately after
             // onCreate on first launch and is the single authoritative place to signal resumed state.
-            FlutterView flutterView = new FlutterView(this, new FlutterTextureView(this));
+            flutterView = new FlutterView(this, new FlutterTextureView(this));
             flutterView.attachToFlutterEngine(Objects.requireNonNull(FlutterEngineCache.getInstance().get(Constants.FLUTTER_CACHE_ENGINE)));
             flutterView.setFitsSystemWindows(false);
             flutterView.setFocusable(true);

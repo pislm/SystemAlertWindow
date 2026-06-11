@@ -87,7 +87,17 @@ public class LogUtils {
                 File logFile = new File(sawFolder.getAbsolutePath() + File.separator + today + ".log");
 
                 if (!logFile.exists()) {
-                    deleteRecursive(sawFolder);
+                    // Remove only stale day-files, not the whole folder. deleteRecursive(sawFolder)
+                    // wiped every prior day's log on the first write of each new day.
+                    File[] existing = sawFolder.listFiles();
+                    if (existing != null) {
+                        for (File f : existing) {
+                            if (!f.getName().equals(today + ".log")) {
+                                //noinspection ResultOfMethodCallIgnored
+                                f.delete();
+                            }
+                        }
+                    }
                     try {
                         if (!logFile.createNewFile()) {
                             Log.e(TAG, "Unable to create the log file");
@@ -129,20 +139,5 @@ public class LogUtils {
             }
         }
         return null;
-    }
-
-    void deleteRecursive(File fileOrDirectory) {
-        try {
-            if (fileOrDirectory.isDirectory()) {
-                for (File child : Objects.requireNonNull(fileOrDirectory.listFiles()))
-                    deleteRecursive(child);
-            } else {
-                //noinspection ResultOfMethodCallIgnored
-                fileOrDirectory.delete();
-            }
-        } catch (Exception ex) {
-            ex.printStackTrace();
-            Log.e(TAG, ex.toString());
-        }
     }
 }

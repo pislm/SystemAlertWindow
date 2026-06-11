@@ -3,7 +3,7 @@
 
 A flutter plugin to show Truecaller like overlay window, over all other apps along with callback events. Android Go or Android 11 & above, this plugin shows notification bubble, in other android versions, it shows an overlay window.
 
-> **Platform support: Android only.** This plugin does **not** work on iOS — iOS has no public API for drawing windows over other apps, so there is no equivalent of the overlay/bubble functionality. The iOS files in this package are a non-functional stub kept only so apps that depend on the plugin still build for iOS; the overlay methods do nothing there. See [iOS](#ios) below.
+> **Platform support: Android only.** This plugin does **not** support iOS — iOS has no public API for drawing windows over other apps, so the overlay/bubble functionality cannot be implemented. The plugin declares no iOS implementation, and the Dart API degrades to safe no-ops on iOS (and any non-Android platform): methods return `false`/`null` instead of throwing, so cross-platform apps still build and run without special-casing every call. See [iOS](#ios) below.
 
 ## Android
 
@@ -25,6 +25,8 @@ A flutter plugin to show Truecaller like overlay window, over all other apps alo
               android:label="system_alert_window_example"
               android:icon="@mipmap/ic_launcher">
 
+> **Android 14 (API 34+) note:** the overlay path runs as a `foregroundServiceType="specialUse"` service, and the plugin declares `FOREGROUND_SERVICE_SPECIAL_USE`. These merge into your app via manifest merging. If your app targets API 34+ and ships to Google Play, you must declare a justification for the `specialUse` foreground-service type in the Play Console; Google reviews this and rejects apps that fit a standard FGS category. This requirement applies to every app depending on this plugin's overlay mode.
+
 #### Android 10 & below, Android GO (API 27)
 
 Uses &#x27;draw on top&#x27; permission and displays it as a overlay window
@@ -43,7 +45,7 @@ User has to manually enable bubbles from the developer options. Uses Android Bub
 
 ## iOS
 
-**Not supported.** iOS provides no public API for displaying a window over other apps, so the overlay/bubble feature cannot be implemented. The bundled iOS plugin is a stub: `showSystemWindow` and the other overlay methods have no effect (only `getPlatformVersion` returns a real value). Do not rely on this plugin for any iOS functionality.
+**Not supported.** iOS provides no public API for displaying a window over other apps, so the overlay/bubble feature cannot be implemented. The plugin ships **no iOS implementation** (nothing is registered on iOS). The Dart API degrades gracefully: `showSystemWindow`/`updateSystemWindow`/`closeSystemWindow`/`checkPermissions`/`requestPermissions`/`isBubbleMode` resolve with `false`, `platformVersion`/`getLogFile`/`sendMessageToOverlay` resolve with `null`, `enableLogs` is a no-op, and `overlayListener` never emits. Calls do **not** throw and do **not** hang, so an app can call them unconditionally — but they do nothing on iOS. Do not rely on this plugin for any iOS overlay functionality.
 
 
 ## Example
@@ -51,7 +53,7 @@ User has to manually enable bubbles from the developer options. Uses Android Bub
 #### Show Overlay
 
 #### Request overlay permission
-      await SystemAlertWindow.requestPermissions;
+      await SystemAlertWindow.requestPermissions();
 
 ### Inside `main.dart` create an entry point for your Overlay widget;
 ```dart
@@ -86,12 +88,15 @@ await SystemAlertWindow.showSystemWindow();
 /// `notificationBody` Notification body, applicable in case of bubble
 /// `prefMode` Preference for the system window. Default is [SystemWindowPrefMode.DEFAULT]
 /// `layoutParamFlags` List of List of WindowManager.LayoutParams. This is not applicable for bubbles.
-await FlutterOverlayWindow.updateSystemWindow();
+await SystemAlertWindow.updateSystemWindow();
 
  // closes overlay if open
 await SystemAlertWindow.closeSystemWindow();
 
  // broadcast data to overlay app from main app
+ // NOTE: this channel is one-way (main app -> overlay). Calling sendMessageToOverlay from
+ // inside the overlay isolate loops back to the overlay itself, not the main app — for
+ // overlay -> main-app communication use the IsolateNameServer pattern shown below.
 await SystemAlertWindow.sendMessageToOverlay("Hello from the other side");
 
  //streams message from main app to overlay.
@@ -140,7 +145,7 @@ class IsolateManager{
 
 ###### While initializing system alert window in your code
 ```dart
-    await SystemAlertWindow.checkPermissions;
+    await SystemAlertWindow.checkPermissions();
     ReceivePort _port = ReceivePort();
     IsolateManager.registerPortWithName(_port.sendPort);
     _port.listen((message) {

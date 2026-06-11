@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`system_alert_window` is a Flutter **plugin** (not an app) that displays a Truecaller-like overlay window over all other apps on Android, with two-way messaging and click callbacks. The overlay UI is itself a Flutter widget tree rendered by a **second, headless FlutterEngine**. iOS is effectively unimplemented (`ios/Classes/SwiftSystemAlertWindowPlugin.swift` only handles `getPlatformVersion` and shows a stub `UIAlertController`).
+`system_alert_window` is a Flutter **plugin** (not an app) that displays a Truecaller-like overlay window over all other apps on Android, with two-way messaging and click callbacks. The overlay UI is itself a Flutter widget tree rendered by a **second, headless FlutterEngine**. The plugin is **Android-only**: there is no `ios/` directory and `pubspec.yaml` declares no iOS platform. The Dart API guards every method with `defaultTargetPlatform == TargetPlatform.android`, so on iOS (or any non-Android platform) calls are safe no-ops returning `false`/`null` instead of throwing `MissingPluginException`.
 
 Native package id is `in.jvapps.system_alert_window`; the published pub.dev package is `system_alert_window`.
 
@@ -75,4 +75,4 @@ When editing display logic, change `isBubbleMode`/`isForceAndroidBubble` togethe
 
 - Renaming the `overlayMain` entry point, or forgetting `@pragma("vm:entry-point")`, silently breaks the overlay (the engine starts but renders nothing). Tree-shaking removes un-annotated entry points in release builds.
 - The example's `example/android/app/src/main/AndroidManifest.xml` intentionally declares `android.hardware.ram.low` to exercise the forced-bubble path — don't "clean that up."
-- iOS changes here are essentially greenfield; the Swift plugin is a placeholder.
+- There is no iOS implementation by design. If iOS support is ever revisited, re-add the `ios:` platform to `pubspec.yaml` plus an `ios/` podspec + plugin class, and drop the `_isAndroid` no-op guards in `lib/system_alert_window.dart`. Until then, keep those guards so non-Android calls don't throw.

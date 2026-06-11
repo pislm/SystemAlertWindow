@@ -26,7 +26,6 @@ import java.util.HashMap;
 import java.util.Objects;
 
 import in.jvapps.system_alert_window.R;
-import in.jvapps.system_alert_window.SystemAlertWindowPlugin;
 import in.jvapps.system_alert_window.utils.Commons;
 import in.jvapps.system_alert_window.utils.Constants;
 import in.jvapps.system_alert_window.utils.ContextHolder;
@@ -64,13 +63,14 @@ public class WindowServiceNew extends Service implements View.OnTouchListener {
     @Override
     public void onCreate() {
         createNotificationChannel();
-        Intent notificationIntent = new Intent(this, SystemAlertWindowPlugin.class);
-        PendingIntent pendingIntent;
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-            pendingIntent = PendingIntent.getActivity(this,
-                    0, notificationIntent, PendingIntent.FLAG_MUTABLE);
-        } else {
-            pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, 0);
+        // Tapping the foreground-service notification should open the host app. The previous target
+        // (SystemAlertWindowPlugin.class) is a FlutterPlugin, not an Activity, so the tap did nothing.
+        Intent notificationIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
+        PendingIntent pendingIntent = null;
+        if (notificationIntent != null) {
+            int piFlags = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S
+                    ? PendingIntent.FLAG_IMMUTABLE : 0;
+            pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, piFlags);
         }
         Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Overlay window service is running")
@@ -190,37 +190,14 @@ public class WindowServiceNew extends Service implements View.OnTouchListener {
             try {
                 windowManager.addView(flutterView, params);
             } catch (Exception ex) {
-                LogUtils.getInstance().e(TAG, ex.toString());
-                retryCreateWindow(paramsMap);
+                // A retry with identical params/engine/permission state would just fail the same way
+                // (the realistic cause is a revoked draw-over-apps permission). Clean up the orphan
+                // FlutterView so the cached engine isn't left attached to an unshown surface.
+                LogUtils.getInstance().e(TAG, "addView failed: " + ex.toString());
+                closeWindow(false);
             }
         } catch (Exception ex) {
             LogUtils.getInstance().e(TAG, "createWindow " + ex.getMessage());
-        }
-    }
-
-    @SuppressLint("ClickableViewAccessibility")
-    private void retryCreateWindow(HashMap<String, Object> paramsMap) {
-        try {
-            LogUtils.getInstance().d(TAG, "Retrying create window");
-            closeWindow(false);
-            setWindowManager();
-            setWindowLayoutFromMap(paramsMap);
-            WindowManager.LayoutParams params = getLayoutParams();
-            FlutterEngine engine = FlutterEngineCache.getInstance().get(Constants.FLUTTER_CACHE_ENGINE);
-            if (engine == null) {
-                throw new IllegalStateException("FlutterEngine not available");
-            }
-            engine.getLifecycleChannel().appIsResumed();
-            flutterView = new FlutterView(getApplicationContext(), new FlutterTextureView(getApplicationContext()));
-            flutterView.attachToFlutterEngine(Objects.requireNonNull(FlutterEngineCache.getInstance().get(Constants.FLUTTER_CACHE_ENGINE)));
-            flutterView.setFitsSystemWindows(true);
-            flutterView.setFocusable(true);
-            flutterView.setFocusableInTouchMode(true);
-            flutterView.setBackgroundColor(Color.TRANSPARENT);
-            flutterView.setOnTouchListener(this);
-            windowManager.addView(flutterView, params);
-        } catch (Exception ex) {
-            LogUtils.getInstance().e(TAG, "retryCreateWindow " + ex.getMessage());
         }
     }
 
@@ -292,9 +269,18 @@ public class WindowServiceNew extends Service implements View.OnTouchListener {
                         offsetY = event.getRawY();
                         params.y = params.y + (int) dy;
                         windowManager.updateViewLayout(flutterView, params);
+                        // Consume the drag so the same stream isn't also delivered to the Flutter
+                        // widget tree (which would spuriously fire taps mid-drag). A plain tap with
+                        // no movement still falls through (moving stays false) so buttons work.
+                        return true;
                     }
                     break;
                 case MotionEvent.ACTION_UP:
+                    if (moving) {
+                        moving = false;
+                        return true;
+                    }
+                    return false;
                 default:
                     return false;
             }

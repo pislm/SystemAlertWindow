@@ -76,6 +76,10 @@ public class SystemAlertWindowPlugin implements FlutterPlugin, ActivityAware, Ba
         BasicMessageChannel<Object> messenger = new BasicMessageChannel<>(flutterPluginBinding.getBinaryMessenger(), Constants.MESSAGE_CHANNEL,
                 JSONMessageCodec.INSTANCE);
         messenger.setMessageHandler(this);
+        // NOTE: the overlay engine is intentionally NOT created here. The FlutterEngineGroup-created
+        // overlay engine auto-registers this same plugin, so creating from onAttachedToEngine would
+        // re-enter ensureOverlayEngine() before the cache is populated and spawn engines recursively.
+        // Creation stays in onAttachedToActivity, which never fires for the headless overlay engine.
     }
 
     @Override
@@ -93,23 +97,31 @@ public class SystemAlertWindowPlugin implements FlutterPlugin, ActivityAware, Ba
         LogUtils.getInstance().d(TAG, "Initializing on attached to activity");
         if (methodCallHandler != null) {
             methodCallHandler.setActivity(activityPluginBinding.getActivity());
-            try {
-                FlutterEngine existingEngine = FlutterEngineCache.getInstance().get(Constants.FLUTTER_CACHE_ENGINE);
-                if(existingEngine==null){
-                    FlutterEngineGroup enn = new FlutterEngineGroup(context);
-                    DartExecutor.DartEntrypoint dEntry = new DartExecutor.DartEntrypoint(
-                            FlutterInjector.instance().flutterLoader().findAppBundlePath(),
-                            "overlayMain");
-                    FlutterEngine engine = enn.createAndRunEngine(context, dEntry);
-                    FlutterEngineCache.getInstance().put(Constants.FLUTTER_CACHE_ENGINE, engine);
-                }
-            } catch (Exception e) {
-                LogUtils.getInstance().e(TAG, "Error initializing FlutterEngine: " + e.getMessage());
-            }
-
+            ensureOverlayEngine();
         }
         this.pluginBinding = activityPluginBinding;
         registerListeners();
+    }
+
+    /**
+     * Lazily creates the cached overlay FlutterEngine (entry point {@code overlayMain}) if it does
+     * not already exist. Driven off the application context so it also works from a headless /
+     * no-Activity flow, not only after onAttachedToActivity. Idempotent and self-contained.
+     */
+    private void ensureOverlayEngine() {
+        if (context == null) return;
+        try {
+            if (FlutterEngineCache.getInstance().get(Constants.FLUTTER_CACHE_ENGINE) == null) {
+                FlutterEngineGroup enn = new FlutterEngineGroup(context);
+                DartExecutor.DartEntrypoint dEntry = new DartExecutor.DartEntrypoint(
+                        FlutterInjector.instance().flutterLoader().findAppBundlePath(),
+                        "overlayMain");
+                FlutterEngine engine = enn.createAndRunEngine(context, dEntry);
+                FlutterEngineCache.getInstance().put(Constants.FLUTTER_CACHE_ENGINE, engine);
+            }
+        } catch (Exception e) {
+            LogUtils.getInstance().e(TAG, "Error initializing FlutterEngine: " + e.getMessage());
+        }
     }
 
     @Override
@@ -136,7 +148,11 @@ public class SystemAlertWindowPlugin implements FlutterPlugin, ActivityAware, Ba
         try {
             FlutterEngine engine = FlutterEngineCache.getInstance().get(Constants.FLUTTER_CACHE_ENGINE);
             if (engine == null) {
-                throw new IllegalStateException("FlutterEngine not available");
+                // Always reply, even when the overlay engine is absent — otherwise the awaiting
+                // Dart Future from sendMessageToOverlay() hangs forever.
+                LogUtils.getInstance().e(TAG, "onMessage: overlay FlutterEngine not available; replying null");
+                reply.reply(null);
+                return;
             }
 
             new BasicMessageChannel<>(
@@ -147,6 +163,11 @@ public class SystemAlertWindowPlugin implements FlutterPlugin, ActivityAware, Ba
 
         } catch (Exception ex) {
             LogUtils.getInstance().e(TAG, "onMessage error: " + ex.getMessage());
+            try {
+                reply.reply(null);
+            } catch (Exception ignored) {
+                // reply may already have been sent; nothing more to do.
+            }
         }
     }
 }

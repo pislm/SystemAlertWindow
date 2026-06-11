@@ -64,11 +64,13 @@ public class NotificationHelper {
     @RequiresApi(api = Build.VERSION_CODES.Q)
     private void initNotificationManager() {
         if (notificationManager == null) {
-            if (mContext == null) {
+            // Guard the referent, not the WeakReference object (which is never null).
+            Context ctx = mContext.get();
+            if (ctx == null) {
                 LogUtils.getInstance().e(TAG, "Context is null. Can't show the System Alert Window");
                 return;
             }
-            notificationManager = mContext.get().getSystemService(NotificationManager.class);
+            notificationManager = ctx.getSystemService(NotificationManager.class);
             setUpNotificationChannels();
         }
     }
@@ -166,9 +168,11 @@ public class NotificationHelper {
 
     public boolean areBubblesAllowed() {
         if (isMinAndroidR()) {
+            // getNotificationChannel(channelId, conversationId) can return null before any bubble has
+            // been posted; don't rely on an assert (stripped in release) and NPE on canBubble().
             NotificationChannel notificationChannel = notificationManager.getNotificationChannel(CHANNEL_ID, BUBBLE_SHORTCUT_ID);
-            assert notificationChannel != null;
-            return notificationManager.areBubblesAllowed() || notificationChannel.canBubble();
+            boolean channelCanBubble = notificationChannel != null && notificationChannel.canBubble();
+            return notificationManager.areBubblesAllowed() || channelCanBubble;
         } else {
             int devOptions = Settings.Secure.getInt(mContext.get().getContentResolver(), Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0);
             if (devOptions == 1) {

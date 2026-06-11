@@ -40,7 +40,11 @@ public class Commons {
 
 
     public static int getPixelsFromDp(@NonNull Context context, int dp) {
-        if (dp == -1) return -1;
+        // Pass any negative sentinel through unchanged. Dart sends MATCH_PARENT (-1) and
+        // WRAP_CONTENT (-2), which equal WindowManager.LayoutParams.MATCH_PARENT / WRAP_CONTENT.
+        // Previously only -1 was special-cased, so the default WRAP_CONTENT height (-2) was run
+        // through dp->px (= -2 * density) and collapsed the overlay on any non-1.0-density screen.
+        if (dp < 0) return dp;
         return (int) (TypedValue.applyDimension(
                 TypedValue.COMPLEX_UNIT_DIP, dp, context.getResources().getDisplayMetrics()));
     }
@@ -76,7 +80,11 @@ public class Commons {
             ActivityManager activityManager = (ActivityManager) context.getSystemService(ACTIVITY_SERVICE);
             if (activityManager != null) {
                 PackageManager pm = context.getPackageManager();
-                return !pm.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE) || pm.hasSystemFeature(PackageManager.FEATURE_RAM_LOW) || activityManager.isLowRamDevice();
+                // Force bubble only on genuinely low-RAM / Android Go devices. The previous
+                // !FEATURE_PICTURE_IN_PICTURE term also forced bubble on PIP-less but otherwise
+                // capable devices (many tablets, TV/Auto, budget phones, emulators), silently
+                // overriding an explicit prefMode: OVERLAY.
+                return pm.hasSystemFeature(PackageManager.FEATURE_RAM_LOW) || activityManager.isLowRamDevice();
             } else {
                 LogUtils.getInstance().i("SAW:Commons", "Marking force android bubble as false");
             }

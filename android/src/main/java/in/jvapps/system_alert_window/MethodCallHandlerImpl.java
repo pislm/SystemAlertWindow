@@ -48,6 +48,11 @@ public class MethodCallHandlerImpl implements MethodChannel.MethodCallHandler, P
     @Nullable
     private MethodChannel channel;
 
+    // Held while the "draw over other apps" settings screen is open so requestPermissions can
+    // resolve with the real post-grant state from onActivityResult instead of a stale "false".
+    @Nullable
+    private MethodChannel.Result pendingPermissionResult;
+
     @Override
     public void onMethodCall(@NonNull MethodCall call, @NonNull MethodChannel.Result result) {
         try {
@@ -75,10 +80,27 @@ public class MethodCallHandlerImpl implements MethodChannel.MethodCallHandler, P
                     if (prefMode == null) {
                         prefMode = "default";
                     }
-                    if (askPermission(!isBubbleMode(prefMode))) {
+                    boolean wantOverlay = !isBubbleMode(prefMode);
+                    if (!wantOverlay) {
+                        // Bubbles can only be toggled by the user in notification settings; report the
+                        // current state synchronously.
+                        result.success(askPermission(false));
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(mContext)) {
                         result.success(true);
+                    } else if (mActivity != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        // Defer the reply: the grant happens asynchronously after the user returns from
+                        // the system settings screen, surfaced in onActivityResult.
+                        if (pendingPermissionResult != null) {
+                            pendingPermissionResult.success(false);
+                        }
+                        pendingPermissionResult = result;
+                        Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:" + mContext.getPackageName()));
+                        mActivity.startActivityForResult(intent, ACTION_MANAGE_OVERLAY_PERMISSION_REQUEST_CODE);
                     } else {
-                        result.success(false);
+                        // No Activity to receive the result (or pre-M); fall back to the legacy
+                        // fire-the-intent-and-report-current-state behaviour.
+                        result.success(askPermission(true));
                     }
                     break;
                 case "checkPermissions":
@@ -148,7 +170,8 @@ public class MethodCallHandlerImpl implements MethodChannel.MethodCallHandler, P
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && isBubbleMode(prefMode)) {
                         if (checkPermission(false)) {
                             LogUtils.getInstance().d(TAG, "Going to update Bubble");
-                            NotificationHelper.getInstance(mContext).dismissNotification();
+                            // Re-post with the same notification id to update the bubble in place.
+                            // Cancelling first tore the bubble down and collapsed/flickered it.
                             showBubble(updateTitle, updateBody, updateParams);
                             result.success(true);
                         } else {
@@ -210,7 +233,13 @@ public class MethodCallHandlerImpl implements MethodChannel.MethodCallHandler, P
                     result.notImplemented();
             }
         } catch (Exception ex) {
+            // Always complete the Result on failure; otherwise the awaiting Dart Future hangs forever.
             LogUtils.getInstance().e(TAG, ex.toString());
+            try {
+                result.error("SAW_ERROR", ex.getMessage(), null);
+            } catch (Exception ignored) {
+                // Result was already completed before the throw; nothing more to do.
+            }
         }
     }
 
@@ -244,6 +273,11 @@ public class MethodCallHandlerImpl implements MethodChannel.MethodCallHandler, P
 
         channel.setMethodCallHandler(null);
         channel = null;
+        // Don't leave a deferred requestPermissions() Future dangling if we're torn down mid-flow.
+        if (pendingPermissionResult != null) {
+            pendingPermissionResult.success(false);
+            pendingPermissionResult = null;
+        }
     }
 
     void setActivity(@Nullable Activity activity) {
@@ -260,7 +294,10 @@ public class MethodCallHandlerImpl implements MethodChannel.MethodCallHandler, P
     public boolean askPermission(boolean isOverlay) {
         Context mContext = ContextHolder.getApplicationContext();
         if (mContext != null) {
-            if (!isOverlay && (Commons.isForceAndroidBubble(mContext) || Build.VERSION.SDK_INT > Build.VERSION_CODES.Q)) {
+            // >= Q (not > Q): the show/update gate treats API 29 as bubble-capable, so the permission
+            // check must agree — otherwise API 29 + BUBBLE pref checked the overlay permission while
+            // displaying a bubble. areBubblesAllowed() handles the pre-R dev-options path itself.
+            if (!isOverlay && (Commons.isForceAndroidBubble(mContext) || Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)) {
                 return NotificationHelper.getInstance(mContext).areBubblesAllowed();
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 if (!Settings.canDrawOverlays(mContext)) {
@@ -287,9 +324,10 @@ public class MethodCallHandlerImpl implements MethodChannel.MethodCallHandler, P
 
     public boolean checkPermission(boolean isOverlay) {
         Context mContext = ContextHolder.getApplicationContext();
-        if (!isOverlay && (Commons.isForceAndroidBubble(mContext) || Build.VERSION.SDK_INT > Build.VERSION_CODES.Q)) {
-            //return NotificationHelper.getInstance(mContext).areBubblesAllowed();
-            return true;
+        // Mirror askPermission exactly (same >= Q threshold, same areBubblesAllowed check) so
+        // checkPermissions() never claims a bubble permission that requestPermissions() would deny.
+        if (!isOverlay && (Commons.isForceAndroidBubble(mContext) || Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)) {
+            return NotificationHelper.getInstance(mContext).areBubblesAllowed();
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             return Settings.canDrawOverlays(mContext);
         }
@@ -309,9 +347,15 @@ public class MethodCallHandlerImpl implements MethodChannel.MethodCallHandler, P
     public boolean onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == ACTION_MANAGE_OVERLAY_PERMISSION_REQUEST_CODE) {
             Context mContext = ContextHolder.getApplicationContext();
-            if (!Settings.canDrawOverlays(mContext)) {
+            boolean granted = Settings.canDrawOverlays(mContext);
+            if (!granted) {
                 LogUtils.getInstance().e(TAG, "System Alert Window will not work without 'Can Draw Over Other Apps' permission");
                 Toast.makeText(mContext, "System Alert Window will not work without 'Can Draw Over Other Apps' permission", Toast.LENGTH_LONG).show();
+            }
+            // Resolve the deferred requestPermissions() Future with the real post-grant state.
+            if (pendingPermissionResult != null) {
+                pendingPermissionResult.success(granted);
+                pendingPermissionResult = null;
             }
         }
         return false;
